@@ -33,4 +33,4 @@ watchdog_task(void)
     if (ret <= 0)
         report_errno("watchdog write", ret);
 }
-DECL_TASK(watchdog_task);
+/* DECL_TASK(watchdog_task); */

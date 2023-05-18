@@ -25,7 +25,7 @@ static struct {
     uint32_t next_wake_counter;
     struct timespec next_wake;
     // Unix signal tracking
-    timer_t t_alarm;
+    /* timer_t t_alarm; */
     sigset_t ss_alarm, ss_sleep;
 } TimerInfo;
 
@@ -118,8 +118,7 @@ timer_read_time(void)
 void
 timer_kick(void)
 {
-    struct itimerspec it = { .it_interval = {0, 0}, .it_value = {0, 1} };
-    timer_settime(TimerInfo.t_alarm, TIMER_ABSTIME, &it, NULL);
+    TimerInfo.must_wake_timers = 1;
 }
 
 #define TIMER_IDLE_REPEAT_COUNT 100
@@ -168,7 +167,7 @@ timer_dispatch(void)
     TimerInfo.next_wake = it.it_value = timespec_from_time(next);
     TimerInfo.next_wake_counter = next;
     TimerInfo.must_wake_timers = 0;
-    timer_settime(TimerInfo.t_alarm, TIMER_ABSTIME, &it, NULL);
+    /* timer_settime(TimerInfo.t_alarm, TIMER_ABSTIME, &it, NULL); */
 }
 
 // OS signal handler
@@ -209,7 +208,7 @@ timer_init(void)
     TimerInfo.next_wake = curtime;
     TimerInfo.next_wake_counter = timespec_to_time(curtime);
     // Initialize t_alarm signal based timer
-    ret = timer_create(CLOCK_MONOTONIC, NULL, &TimerInfo.t_alarm);
+    /* ret = timer_create(CLOCK_MONOTONIC, NULL, &TimerInfo.t_alarm); */
     if (ret < 0) {
         report_errno("timer_create", ret);
         return;
@@ -228,14 +227,14 @@ DECL_INIT(timer_init);
 void
 timer_disable_signals(void)
 {
-    sigprocmask(SIG_BLOCK, &TimerInfo.ss_alarm, NULL);
+    /* sigprocmask(SIG_BLOCK, &TimerInfo.ss_alarm, NULL); */
 }
 
 // Restore reception of SIGALRM signal
 void
 timer_enable_signals(void)
 {
-    sigprocmask(SIG_UNBLOCK, &TimerInfo.ss_alarm, NULL);
+    /* sigprocmask(SIG_UNBLOCK, &TimerInfo.ss_alarm, NULL); */
 }
 
 
@@ -267,19 +266,21 @@ irq_restore(irqstatus_t flag)
 void
 irq_wait(void)
 {
-    // Must atomically sleep until signaled
-    if (!readl(&TimerInfo.must_wake_timers)) {
-        timer_disable_signals();
-        if (!TimerInfo.must_wake_timers)
-            console_sleep(&TimerInfo.ss_sleep);
-        timer_enable_signals();
+    struct timespec current_time = timespec_read();
+    if ((current_time.tv_sec > TimerInfo.next_wake.tv_sec)
+        || (current_time.tv_sec == TimerInfo.next_wake.tv_sec && current_time.tv_nsec >= TimerInfo.next_wake.tv_nsec)) {
+        TimerInfo.must_wake_timers = 1;
     }
+
+    if (!TimerInfo.must_wake_timers)
+        console_sleep(&TimerInfo.ss_sleep);
+
     irq_poll();
 }
 
 void
 irq_poll(void)
 {
-    if (readl(&TimerInfo.must_wake_timers))
+    if (TimerInfo.must_wake_timers)
         timer_dispatch();
 }

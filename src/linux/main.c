@@ -4,8 +4,10 @@
 //
 // This file may be distributed under the terms of the GNU GPLv3 license.
 
+#define _GNU_SOURCE
 #include </usr/include/sched.h> // sched_setscheduler sched_get_priority_max
 #include <stdio.h> // fprintf
+#include <stdlib.h>
 #include <string.h> // memset
 #include <unistd.h> // getopt
 #include <sys/mman.h> // mlockall MCL_CURRENT MCL_FUTURE
@@ -13,6 +15,7 @@
 #include "command.h" // DECL_CONSTANT
 #include "internal.h" // console_setup
 #include "sched.h" // sched_main
+#include "gpio.h"
 
 DECL_CONSTANT_STR("MCU", "linux");
 
@@ -63,21 +66,30 @@ DECL_COMMAND_FLAGS(command_config_reset, HF_IN_SHUTDOWN, "config_reset");
  * Startup
  ****************************************************************/
 
+static void int_handler(int _unused) {
+    exit(0);
+}
+
+// ...
+
+
 int
 main(int argc, char **argv)
 {
+   signal(SIGINT, int_handler);
+
     // Parse program args
     orig_argv = argv;
     int opt, watchdog = 0, realtime = 0;
     char *serial = "/tmp/klipper_host_mcu";
     while ((opt = getopt(argc, argv, "wrI:")) != -1) {
         switch (opt) {
-        case 'w':
-            watchdog = 1;
-            break;
-        case 'r':
-            realtime = 1;
-            break;
+        /* case 'w': */
+        /*     watchdog = 1; */
+        /*     break; */
+        /* case 'r': */
+        /*     realtime = 1; */
+        /*     break; */
         case 'I':
             serial = optarg;
             break;
@@ -100,6 +112,17 @@ main(int argc, char **argv)
         int ret = watchdog_setup();
         if (ret)
             return ret;
+    }
+
+    if (gpio_setup()) {
+        return -1;
+    }
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(3, &cpuset);
+    if (sched_setaffinity(getpid(), sizeof(cpuset), &cpuset)) {
+        return -1;
     }
 
     // Main loop
