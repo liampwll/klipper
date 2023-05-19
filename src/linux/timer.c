@@ -4,6 +4,9 @@
 //
 // This file may be distributed under the terms of the GNU GPLv3 license.
 
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <time.h> // struct timespec
 #include "autoconf.h" // CONFIG_CLOCK_FREQ
 #include "board/io.h" // readl
@@ -15,10 +18,12 @@
 
 // Global storage for timer handling
 static struct {
+    uint32_t frequency;
+    uint32_t start;
     // Last time reported by timer_read_time()
     uint32_t last_read_time;
     // Fields for converting from a systime to ticks
-    time_t start_sec;
+    /* time_t start_sec; */
     // Flags for tracking irq_enable()/irq_disable()
     uint32_t must_wake_timers;
     // Time of next software timer (also used to convert from ticks to systime)
@@ -35,12 +40,12 @@ static struct {
  ****************************************************************/
 
 // Convert a 'struct timespec' to a counter value
-static inline uint32_t
-timespec_to_time(struct timespec ts)
-{
-    return ((ts.tv_sec - TimerInfo.start_sec) * CONFIG_CLOCK_FREQ
-            + ts.tv_nsec / NSECS_PER_TICK);
-}
+/* static inline uint32_t */
+/* timespec_to_time(struct timespec ts) */
+/* { */
+/*     return ((ts.tv_sec - TimerInfo.start_sec) * CONFIG_CLOCK_FREQ */
+/*             + ts.tv_nsec / NSECS_PER_TICK); */
+/* } */
 
 // Convert an internal time counter to a 'struct timespec'
 static inline struct timespec
@@ -109,9 +114,13 @@ timer_is_before(uint32_t time1, uint32_t time2)
 uint32_t
 timer_read_time(void)
 {
-    uint32_t t = timespec_to_time(timespec_read());
-    TimerInfo.last_read_time = t;
-    return t;
+    uint64_t cntvct;
+    asm volatile ("isb; mrs %0, cntvct_el0; isb; " : "=r"(cntvct) :: "memory");
+    return (uint32_t)cntvct - TimerInfo.start;
+
+    /* uint32_t t = timespec_to_time(timespec_read()); */
+    /* TimerInfo.last_read_time = t; */
+    /* return t; */
 }
 
 // Activate timer dispatch as soon as possible
@@ -164,7 +173,7 @@ timer_dispatch(void)
     // Schedule SIGALRM signal
     struct itimerspec it;
     it.it_interval = (struct timespec){0, 0};
-    TimerInfo.next_wake = it.it_value = timespec_from_time(next);
+    /* TimerInfo.next_wake = it.it_value = timespec_from_time(next); */
     TimerInfo.next_wake_counter = next;
     TimerInfo.must_wake_timers = 0;
     /* timer_settime(TimerInfo.t_alarm, TIMER_ABSTIME, &it, NULL); */
@@ -180,6 +189,15 @@ timer_signal(int signal)
 void
 timer_init(void)
 {
+    asm volatile ("mrs %0, cntfrq_el0; isb; " : "=r"(TimerInfo.frequency) :: "memory");
+    fprintf(stderr, "frequency: %lu\n", (unsigned long)TimerInfo.frequency);
+    if (TimerInfo.frequency != CONFIG_CLOCK_FREQ) {
+        exit(1);
+    }
+
+    TimerInfo.start = 0;
+    TimerInfo.start = timer_read_time();
+
     // Initialize ss_alarm signal set
     int ret = sigemptyset(&TimerInfo.ss_alarm);
     if (ret < 0) {
@@ -203,10 +221,11 @@ timer_init(void)
         return;
     }
     // Initialize timespec_to_time() and timespec_from_time()
-    struct timespec curtime = timespec_read();
-    TimerInfo.start_sec = curtime.tv_sec + 1;
-    TimerInfo.next_wake = curtime;
-    TimerInfo.next_wake_counter = timespec_to_time(curtime);
+    /* struct timespec curtime = timespec_read(); */
+    /* TimerInfo.start_sec = curtime.tv_sec + 1; */
+    /* TimerInfo.next_wake = curtime; */
+    /* TimerInfo.next_wake_counter = timespec_to_time(curtime); */
+    TimerInfo.next_wake_counter = timer_read_time();
     // Initialize t_alarm signal based timer
     /* ret = timer_create(CLOCK_MONOTONIC, NULL, &TimerInfo.t_alarm); */
     if (ret < 0) {
@@ -263,12 +282,26 @@ irq_restore(irqstatus_t flag)
 {
 }
 
+static struct timespec diff_timespec(const struct timespec *time1, const struct timespec *time0)
+{
+    struct timespec diff = {.tv_sec = time1->tv_sec - time0->tv_sec, .tv_nsec = time1->tv_nsec - time0->tv_nsec};
+    if (diff.tv_nsec < 0) {
+        diff.tv_nsec += 1000000000; // nsec/sec
+        diff.tv_sec--;
+    }
+    return diff;
+}
+
 void
 irq_wait(void)
 {
-    struct timespec current_time = timespec_read();
-    if ((current_time.tv_sec > TimerInfo.next_wake.tv_sec)
-        || (current_time.tv_sec == TimerInfo.next_wake.tv_sec && current_time.tv_nsec >= TimerInfo.next_wake.tv_nsec)) {
+    /* struct timespec current_time = timespec_read(); */
+    /* if ((current_time.tv_sec > TimerInfo.next_wake.tv_sec) */
+    /*     || (current_time.tv_sec == TimerInfo.next_wake.tv_sec && current_time.tv_nsec >= TimerInfo.next_wake.tv_nsec)) { */
+    /*     TimerInfo.must_wake_timers = 1; */
+    /* } */
+    uint32_t current_time = timer_read_time();
+    if (!timer_is_before(current_time, TimerInfo.next_wake_counter)) {
         TimerInfo.must_wake_timers = 1;
     }
 
@@ -281,6 +314,17 @@ irq_wait(void)
 void
 irq_poll(void)
 {
+    /* static struct timespec last_time = { 0 }; */
+    /* struct timespec this_time = timespec_read(); */
+
+    /* struct timespec diff = diff_timespec(&this_time, &last_time); */
+
+    /* if (diff.tv_sec > 1 || diff.tv_nsec > 10000) { */
+    /*     fprintf(stderr, "%lu, %lu\n", (unsigned long)diff.tv_sec, (unsigned long)diff.tv_nsec); */
+    /* } */
+
+    /* last_time = this_time; */
+
     if (TimerInfo.must_wake_timers)
         timer_dispatch();
 }
