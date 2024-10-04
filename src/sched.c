@@ -7,6 +7,8 @@
 #include <setjmp.h> // setjmp
 #include "autoconf.h" // CONFIG_*
 #include "basecmd.h" // stats_update
+#include "board/gpio.h"
+#include "board/internal.h"
 #include "board/io.h" // readb
 #include "board/irq.h" // irq_save
 #include "board/misc.h" // timer_from_us
@@ -332,6 +334,26 @@ sched_shutdown(uint_fast8_t reason)
     longjmp(shutdown_jmp, reason);
 }
 
+/****************************************************************
+ * Soft start
+ ****************************************************************/
+
+DECL_CONSTANT_STR("RESERVE_PINS_soft_start", "PC1,PB5");
+
+static void
+soft_start(void)
+{
+    struct gpio_adc power_good = gpio_adc_setup(GPIO('C', 1));
+    for (int i = 0; i < 1000; ++i) {
+        while (gpio_adc_sample(power_good)) {
+        }
+        if (gpio_adc_read(power_good) < 620) {
+            i = 0;
+        }
+    }
+
+    gpio_out_setup(GPIO('B', 5), 1);
+}
 
 /****************************************************************
  * Startup
@@ -343,6 +365,8 @@ sched_main(void)
 {
     extern void ctr_run_initfuncs(void);
     ctr_run_initfuncs();
+
+    soft_start();
 
     sendf("starting");
 
